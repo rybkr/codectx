@@ -83,9 +83,8 @@ def _extract_symbols(source: bytes, module: str) -> dict[str, dict]:
     symbols = {}
     captures = QueryCursor(FN_QUERY).captures(tree.root_node)
     for n in captures.get("fn.name", []):
-        name = n.text.decode()
-        qname = f"{module}.{name}"
         fn_node = n.parent
+        qname = _qualified_symbol_name(fn_node, module)
         symbols[qname] = {
             "node": fn_node,
             "kind": "function",
@@ -119,10 +118,22 @@ def _enclosing_function(node: Node, module: str) -> str | None:
     current = node.parent
     while current:
         if current.type == "function_definition":
-            name = current.child_by_field_name("name").text.decode()
-            return f"{module}.{name}"
+            return _qualified_symbol_name(current, module)
         current = current.parent
     return None
+
+
+def _qualified_symbol_name(node: Node, module: str) -> str:
+    parts: list[str] = []
+    current: Node | None = node
+    while current:
+        if current.type in {"function_definition", "class_definition"}:
+            name_node = current.child_by_field_name("name")
+            if name_node is not None:
+                parts.append(name_node.text.decode())
+        current = current.parent
+    parts.reverse()
+    return ".".join([module, *parts])
 
 
 class DependencyGraph:
