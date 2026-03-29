@@ -86,6 +86,16 @@ def _iter_source_files(root: Path) -> list[Path]:
     return files
 
 
+def _is_trackable_source_path(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    if path.suffix != ".py":
+        return False
+    return not any(part in EXCLUDED_DIR_NAMES for part in relative.parts)
+
+
 def _extract_symbols(source: bytes, module: str) -> dict[str, dict]:
     tree = parser.parse(source)
     symbols = {}
@@ -161,6 +171,33 @@ def _qualified_symbol_name(node: Node, module: str) -> str:
     return ".".join([module, *parts])
 
 
+def _build_graph_from_sources(
+    root: Path,
+    sources: dict[Path, bytes],
+) -> tuple[nx.DiGraph, dict[str, dict]]:
+    graph = nx.DiGraph()
+    symbols: dict[str, dict] = {}
+    for path in sorted(sources):
+        module = _module_name(path, root)
+        source = sources[path]
+        syms = _extract_symbols(source, module)
+        symbols.update(syms)
+        for qname in syms:
+            graph.add_node(qname)
+    for path in sorted(sources):
+        module = _module_name(path, root)
+        source = sources[path]
+        for caller, callee in _extract_calls(source, module):
+            candidates = [symbol for symbol in symbols if symbol.endswith(f".{callee}")]
+            for candidate in candidates:
+                graph.add_edge(caller, candidate)
+                if symbols[candidate]["kind"] == "class":
+                    init_symbol = f"{candidate}.__init__"
+                    if init_symbol in symbols:
+                        graph.add_edge(caller, init_symbol)
+    return graph, symbols
+
+
 class DependencyGraph:
     def __init__(self, root: Path):
         self.root: Path = root
@@ -173,19 +210,8 @@ class DependencyGraph:
         await asyncio.to_thread(self._build_sync)
 
     def _build_sync(self) -> None:
-        source_files = _iter_source_files(self.root)
-        for path in source_files:
-            module = _module_name(path, self.root)
-            source = path.read_bytes()
-            syms = _extract_symbols(source, module)
-            self._symbols.update(syms)
-            for qname in syms:
-                self._g.add_node(qname)
-        for path in source_files:
-            module = _module_name(path, self.root)
-            source = path.read_bytes()
-            for caller, callee in _extract_calls(source, module):
-                self._add_edge_if_known(caller, callee)
+        sources = {path: path.read_bytes() for path in _iter_source_files(self.root)}
+        self._g, self._symbols = _build_graph_from_sources(self.root, sources)
         log.info(
             "graph built: %d nodes, %d edges",
             self._g.number_of_nodes(),
@@ -208,13 +234,28 @@ class DependencyGraph:
         return self._symbols.get(symbol, {}).get("interface_hash")
 
     def update_file(self, path: Path) -> set[str]:
-        module = _module_name(path, self.root)
-        source = path.read_bytes()
-        new_syms = _extract_symbols(source, module)
+        return self.rebuild_with_overrides({path: path.read_bytes()})
+
+    def rebuild_with_overrides(self, overrides: dict[Path, bytes | None]) -> set[str]:
+        old_symbols = dict(self._symbols)
+        sources = {path: path.read_bytes() for path in _iter_source_files(self.root)}
+        normalized: dict[Path, bytes | None] = {}
+        for path, content in overrides.items():
+            path_obj = path if path.is_absolute() else self.root / path
+            if not _is_trackable_source_path(path_obj, self.root):
+                continue
+            normalized[path_obj] = content
+        for path, content in normalized.items():
+            if content is None:
+                sources.pop(path, None)
+            else:
+                sources[path] = content
+
+        self._g, self._symbols = _build_graph_from_sources(self.root, sources)
         changed = set()
-        for qname, data in new_syms.items():
-            old = self._symbols.get(qname)
+        for qname, data in self._symbols.items():
+            old = old_symbols.get(qname)
             if old is None or old["interface_hash"] != data["interface_hash"]:
                 changed.add(qname)
-        self._symbols.update(new_syms)
+        changed.update(set(old_symbols) - set(self._symbols))
         return changed
