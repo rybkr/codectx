@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import logging
 import re
+import socket
+import subprocess
 from pathlib import Path
 
 MARKER_START = "<!-- async-context-server:start -->"
@@ -62,6 +64,52 @@ def _server_guidance(base_url: str) -> str:
     )
 
 
+def _detect_lan_ip() -> str | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        address = sock.getsockname()[0]
+        if address and not address.startswith("127."):
+            return address
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+    try:
+        result = subprocess.run(
+            ["ipconfig", "getifaddr", "en0"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+    address = result.stdout.strip()
+    if not address or address.startswith("127."):
+        return None
+    return address
+
+
+def _instruction_base_url(args: argparse.Namespace) -> str:
+    public_url = getattr(args, "public_url", None)
+    if public_url:
+        return public_url.rstrip("/")
+
+    if args.host in {"0.0.0.0", "::"}:
+        address = _detect_lan_ip()
+        if address:
+            return f"http://{address}:{args.port}"
+        log.warning(
+            "could not determine a reachable host automatically; "
+            "use --public-url to override the injected server URL"
+        )
+        return f"http://127.0.0.1:{args.port}"
+
+    return f"http://{args.host}:{args.port}"
+
+
 def _remove_marked_block(contents: str) -> str:
     pattern = re.compile(
         rf"\n?{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}\n?",
@@ -78,7 +126,7 @@ def _ensure_server_guidance(args: argparse.Namespace, root: Path) -> Path | None
     else:
         contents = ""
 
-    block = _server_guidance(f"http://{args.host}:{args.port}")
+    block = _server_guidance(_instruction_base_url(args))
     pattern = re.compile(
         rf"{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}\n?",
         flags=re.DOTALL,
@@ -162,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("root", nargs="?", default=".", help="path to codebase root")
     parser.add_argument("--host", default="127.0.0.1", help="bind host")
     parser.add_argument("--port", type=int, default=27962, help="bind port")
+    parser.add_argument(
+        "--public-url",
+        help="reachable base URL to write into agent instructions, e.g. http://10.186.122.83:27962",
+    )
     parser.add_argument(
         "--instructions-file",
         help="repo-relative path to the agent instructions file to update",
