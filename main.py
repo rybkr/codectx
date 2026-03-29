@@ -1,7 +1,11 @@
+import argparse
 import asyncio
 import logging
+import re
 from pathlib import Path
-import argparse
+
+MARKER_START = "<!-- async-context-server:start -->"
+MARKER_END = "<!-- async-context-server:end -->"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,110 +14,114 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 
-async def cmd_graph_build(args: argparse.Namespace) -> None:
-    from graph.dependency_graph import DependencyGraph
+def _resolve_instructions_path(root: Path, requested: str | None) -> Path:
+    if requested:
+        return root / requested
 
-    root = Path(args.root)
-    if not root.exists():
-        raise SystemExit(f"error: path does not exist: {root}")
-    log.info("building graph for %s", root)
-    graph = DependencyGraph(root=root)
-    await graph.build()
-    print(f"\nnodes : {graph._g.number_of_nodes()}")
-    print(f"edges : {graph._g.number_of_edges()}")
-    print(f"symbols: {list(graph._symbols)}")
+    for candidate in ("AGENTS.md", "CLAUDE.md"):
+        path = root / candidate
+        if path.exists():
+            return path
+    return root / "AGENTS.md"
 
 
-async def cmd_graph_query(args: argparse.Namespace) -> None:
-    from graph.dependency_graph import DependencyGraph
-
-    root = Path(args.root)
-    graph = DependencyGraph(root=root)
-    await graph.build()
-    symbol = args.symbol
-    deps = graph.dependents(symbol)
-    iface = graph.interface_hash(symbol)
-    print(f"\nsymbol : {symbol}")
-    print(f"interface hash : {iface}")
-    print(f"dependents ({len(deps)}): ")
-    for d in sorted(deps):
-        print(f" {d}")
-
-
-async def cmd_context_query(args: argparse.Namespace) -> None:
-    from graph.context_graph import ContextGraph
-    from graph.dependency_graph import DependencyGraph
-
-    root = Path(args.root)
-    graph = DependencyGraph(root=root)
-    context = ContextGraph(graph)
-    await context.build()
-
-    if args.file:
-        records = context.symbols_in_file(args.file)
-        print(f"\nfile : {args.file}")
-        print(f"symbols ({len(records)}):")
-        for record in records:
-            print(f" {record.symbol} [{record.kind}]")
-        return
-
-    if args.task:
-        records = context.relevant_symbols_for_task(args.task, limit=args.limit)
-        print(f"\ntask : {args.task}")
-        print(f"relevant symbols ({len(records)}):")
-        for record in records:
-            print(f" {record.symbol} [{record.kind}]")
-        return
-
-    if args.symbol:
-        subgraph = context.subgraph_for_symbols([args.symbol], depth=args.depth)
-        print(f"\nsymbol : {args.symbol}")
-        print(f"nodes ({len(subgraph.nodes)}):")
-        for node in subgraph.nodes:
-            print(f" {node}")
-        print(f"edges ({len(subgraph.edges)}):")
-        for source, target in subgraph.edges:
-            print(f" {source} -> {target}")
-        return
-
-    raise SystemExit("error: provide one of --file, --task, or --symbol")
+def _server_guidance(base_url: str) -> str:
+    return "\n".join(
+        [
+            MARKER_START,
+            "## Shared Context Server",
+            "",
+            f"Use `{base_url}` as the shared source of truth for cross-agent context.",
+            "",
+            "Query workflow:",
+            f"- call `GET {base_url}/health` to confirm the server is available before relying on shared state",
+            f"- call `POST {base_url}/tasks/relevant-symbols` when starting a task to find the most relevant symbols for that task",
+            f"- call `GET {base_url}/files?path=...` after opening a file to inspect the symbols defined in that file",
+            f"- call `GET {base_url}/symbols/{{symbol}}` when you need dependencies and dependents for a specific symbol",
+            f"- call `POST {base_url}/subgraph` when you need a local context neighborhood around one or more symbols",
+            "",
+            "Mutation workflow:",
+            f"- call `POST {base_url}/updates/files` immediately after changing code and send repo-relative file snapshots with `path`, `before`, and `after`",
+            "- use the response `changed_symbols` and `impacted_symbols` to understand invalidation scope and what other agents may need to refresh",
+            f"- call `POST {base_url}/invalidate` only for manual symbol invalidation when you do not have file snapshots available",
+            "",
+            "Recovery and safety:",
+            "- if local reasoning conflicts with server state, trust the server",
+            f"- call `POST {base_url}/reset` only for operator recovery to rebuild server state from disk, not as part of normal agent flow",
+            MARKER_END,
+        ]
+    )
 
 
-async def cmd_run(args: argparse.Namespace) -> None:
-    import yaml
-    from agents.coding_agent import CodingAgent
-    from graph.dependency_graph import DependencyGraph
-    from detection.commit_watcher import CommitWatcher
-    from detection.invalidation_engine import InvalidationEngine
-    from detection.context_manager import ContextManager
-    from experiments.harness import ExperimentHarness
+def _remove_marked_block(contents: str) -> str:
+    pattern = re.compile(
+        rf"\n?{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}\n?",
+        flags=re.DOTALL,
+    )
+    updated = pattern.sub("\n", contents)
+    return updated.rstrip() + ("\n" if updated.strip() else "")
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-    graph = DependencyGraph(root=Path(cfg["codebase_root"]))
-    await graph.build()
-    agents = [
-        CodingAgent(id=i, worktree=Path(wt), graph=graph, cfg=cfg)
-        for i, wt in enumerate(cfg["worktrees"])
-    ]
-    ctx_mgr = ContextManager(agents=agents)
-    engine = InvalidationEngine(graph=graph, context_manager=ctx_mgr)
-    watcher = CommitWatcher(worktrees=cfg["worktrees"], engine=engine)
-    if cfg.get("mode") == "experiment":
-        await ExperimentHarness(agents=agents, watcher=watcher, cfg=cfg).run()
+
+def _ensure_server_guidance(args: argparse.Namespace, root: Path) -> Path | None:
+    target = _resolve_instructions_path(root, args.instructions_file)
+    if target.exists():
+        contents = target.read_text(encoding="utf-8")
     else:
-        await asyncio.gather(watcher.watch(), *[a.run() for a in agents])
+        contents = ""
+
+    block = _server_guidance(f"http://{args.host}:{args.port}")
+    pattern = re.compile(
+        rf"{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}\n?",
+        flags=re.DOTALL,
+    )
+    if MARKER_START in contents and MARKER_END in contents:
+        updated = pattern.sub(f"{block}\n", contents, count=1)
+        if updated != contents:
+            target.write_text(updated, encoding="utf-8")
+            log.info("updated server guidance in %s", target.relative_to(root))
+        else:
+            log.info("server guidance already current in %s", target.relative_to(root))
+        return target
+
+    prompt = (
+        f"Inject shared context server guidance into {target.relative_to(root)}? [Y/n] "
+    )
+    answer = input(prompt).strip().lower()
+    if answer.startswith("n"):
+        log.info("skipping agent guidance injection")
+        return None
+
+    updated = contents.rstrip()
+    if updated:
+        updated = f"{updated}\n\n{block}\n"
+    else:
+        updated = f"{block}\n"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(updated, encoding="utf-8")
+    log.info("wrote server guidance to %s", target.relative_to(root))
+    return target
 
 
-async def cmd_eval_invalidation(args: argparse.Namespace) -> None:
-    from experiments.harness import run_and_print
+def _remove_server_guidance(root: Path, target: Path | None) -> None:
+    if target is None or not target.exists():
+        return
 
-    exit_code = await run_and_print(args.scenarios or None)
-    if exit_code:
-        raise SystemExit(exit_code)
+    contents = target.read_text(encoding="utf-8")
+    if MARKER_START not in contents or MARKER_END not in contents:
+        return
+
+    updated = _remove_marked_block(contents)
+    if updated:
+        target.write_text(updated, encoding="utf-8")
+        log.info("removed server guidance from %s", target.relative_to(root))
+        return
+
+    target.unlink()
+    log.info("removed empty instructions file %s", target.relative_to(root))
 
 
-async def cmd_context_serve(args: argparse.Namespace) -> None:
+async def serve(args: argparse.Namespace) -> None:
     import uvicorn
 
     from server.context_server import create_app
@@ -122,71 +130,38 @@ async def cmd_context_serve(args: argparse.Namespace) -> None:
     if not root.exists():
         raise SystemExit(f"error: path does not exist: {root}")
 
-    config = uvicorn.Config(
-        app=create_app(root),
-        host=args.host,
-        port=args.port,
-        log_level="info",
-    )
-    server = uvicorn.Server(config)
-    await server.serve()
+    target = _ensure_server_guidance(args, root)
+
+    try:
+        config = uvicorn.Config(
+            app=create_app(root),
+            host=args.host,
+            port=args.port,
+            log_level="info",
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+    finally:
+        _remove_server_guidance(root, target)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="cv", description="context-validity toolkit")
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    gb = sub.add_parser("graph:build", help="build dependency graph and print stats")
-    gb.add_argument("root", help="path to codebase root")
-
-    gq = sub.add_parser("graph:query", help="query dependents of a symbol")
-    gq.add_argument("root", help="path to codebase root")
-    gq.add_argument("symbol", help="qualified symbol e.g. mymodule.my_function")
-
-    cq = sub.add_parser(
-        "context:query",
-        help="query the shared context graph source of truth",
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="serve the shared context graph over HTTP",
     )
-    cq.add_argument("root", help="path to codebase root")
-    cq.add_argument("--file", help="repo-relative python file to inspect")
-    cq.add_argument("--task", help="task text to rank relevant symbols for")
-    cq.add_argument("--symbol", help="symbol to expand into a local context subgraph")
-    cq.add_argument("--depth", type=int, default=1, help="subgraph expansion depth for --symbol")
-    cq.add_argument("--limit", type=int, default=12, help="max symbols to return for --task")
-
-    cs = sub.add_parser(
-        "context:serve",
-        help="serve the shared context graph over HTTP",
+    parser.add_argument("root", nargs="?", default=".", help="path to codebase root")
+    parser.add_argument("--host", default="127.0.0.1", help="bind host")
+    parser.add_argument("--port", type=int, default=8000, help="bind port")
+    parser.add_argument(
+        "--instructions-file",
+        help="repo-relative path to the agent instructions file to update",
     )
-    cs.add_argument("root", help="path to codebase root")
-    cs.add_argument("--host", default="127.0.0.1", help="bind host")
-    cs.add_argument("--port", type=int, default=8000, help="bind port")
+    return parser
 
-    ev = sub.add_parser(
-        "eval:invalidation",
-        help="run reproducible invalidation scenarios",
-    )
-    ev.add_argument(
-        "scenarios",
-        nargs="*",
-        help="optional scenario names to run",
-    )
-
-    rn = sub.add_parser("run", help="run full multi-agent pipeline")
-    rn.add_argument("--config", default="config.yaml", help="path to config.yaml")
-
-    return p
-
-
-_COMMANDS = {
-    "context:query": cmd_context_query,
-    "context:serve": cmd_context_serve,
-    "eval:invalidation": cmd_eval_invalidation,
-    "graph:build": cmd_graph_build,
-    "graph:query": cmd_graph_query,
-    "run": cmd_run,
-}
 
 if __name__ == "__main__":
-    args = build_parser().parse_args()
-    asyncio.run(_COMMANDS[args.cmd](args))
+    try:
+        asyncio.run(serve(build_parser().parse_args()))
+    except KeyboardInterrupt:
+        log.info("server stopped")
