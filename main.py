@@ -21,7 +21,7 @@ async def cmd_graph_build(args: argparse.Namespace) -> None:
     await graph.build()
     print(f"\nnodes : {graph._g.number_of_nodes()}")
     print(f"edges : {graph._g.number_of_edges()}")
-    print(f"symbols: {list(graph._symbols)[:10]} ...")
+    print(f"symbols: {list(graph._symbols)}")
 
 
 async def cmd_graph_query(args: argparse.Namespace) -> None:
