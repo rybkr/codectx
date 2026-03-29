@@ -1,0 +1,12 @@
+[project]
+name = "async"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "networkx>=3.6.1",
+    "pyyaml>=6.0.3",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-python>=0.25.0",
+]
