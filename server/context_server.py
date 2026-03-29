@@ -139,7 +139,9 @@ class ContextService:
         try:
             path_obj.relative_to(self.root)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"invalid path: {path}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"invalid path: {path}"
+            ) from exc
         return path_obj
 
 
@@ -178,8 +180,12 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail="symbol not found")
         return {
             "record": _symbol_to_dict(record),
-            "dependencies": [_symbol_to_dict(item) for item in service.context.dependencies(symbol)],
-            "dependents": [_symbol_to_dict(item) for item in service.context.dependents(symbol)],
+            "dependencies": [
+                _symbol_to_dict(item) for item in service.context.dependencies(symbol)
+            ],
+            "dependents": [
+                _symbol_to_dict(item) for item in service.context.dependents(symbol)
+            ],
         }
 
     @app.get("/files")
@@ -188,11 +194,16 @@ def create_app(root: Path) -> FastAPI:
             records = service.context.symbols_in_file(path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"path": path, "symbols": [_symbol_to_dict(record) for record in records]}
+        return {
+            "path": path,
+            "symbols": [_symbol_to_dict(record) for record in records],
+        }
 
     @app.post("/tasks/relevant-symbols")
     async def relevant_symbols(request: TaskQueryRequest) -> dict[str, object]:
-        records = service.context.relevant_symbols_for_task(request.task, limit=request.limit)
+        records = service.context.relevant_symbols_for_task(
+            request.task, limit=request.limit
+        )
         return {
             "task": request.task,
             "symbols": [_symbol_to_dict(record) for record in records],
@@ -200,7 +211,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/subgraph")
     async def subgraph(request: SubgraphRequest) -> dict[str, object]:
-        graph = service.context.subgraph_for_symbols(request.symbols, depth=request.depth)
+        graph = service.context.subgraph_for_symbols(
+            request.symbols, depth=request.depth
+        )
         return _subgraph_to_dict(graph)
 
     @app.post("/invalidate")
@@ -252,6 +265,10 @@ def _edit_to_dict(edit: EditResult) -> dict[str, object]:
     return {
         "symbol": edit.symbol,
         "kind": edit.kind.name.lower(),
-        "old_interface": None if edit.old_interface is None else edit.old_interface.decode("utf-8", errors="replace"),
-        "new_interface": None if edit.new_interface is None else edit.new_interface.decode("utf-8", errors="replace"),
+        "old_interface": None
+        if edit.old_interface is None
+        else edit.old_interface.decode("utf-8", errors="replace"),
+        "new_interface": None
+        if edit.new_interface is None
+        else edit.new_interface.decode("utf-8", errors="replace"),
     }

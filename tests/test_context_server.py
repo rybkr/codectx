@@ -60,8 +60,7 @@ class ContextServerTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             (root / "main.py").write_text(
-                "def live_symbol() -> None:\n"
-                "    return None\n",
+                "def live_symbol() -> None:\n    return None\n",
                 encoding="utf-8",
             )
             client = TestClient(create_app(root))
@@ -82,12 +81,16 @@ class ContextServerTests(unittest.TestCase):
                 },
             )
             self.assertEqual(update_response.status_code, 200)
-            self.assertEqual(client.get("/symbols/main.synthetic_symbol").status_code, 200)
+            self.assertEqual(
+                client.get("/symbols/main.synthetic_symbol").status_code, 200
+            )
 
             reset_response = client.post("/reset")
             self.assertEqual(reset_response.status_code, 200)
             self.assertEqual(reset_response.json()["status"], "ok")
-            self.assertEqual(client.get("/symbols/main.synthetic_symbol").status_code, 404)
+            self.assertEqual(
+                client.get("/symbols/main.synthetic_symbol").status_code, 404
+            )
             self.assertEqual(client.get("/symbols/main.live_symbol").status_code, 200)
 
 

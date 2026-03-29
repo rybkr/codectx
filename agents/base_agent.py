@@ -124,7 +124,12 @@ class BaseAgent(ABC):
     def query_relevant_symbols(self, task_text: str, limit: int = 12) -> list[str]:
         if self.context_graph is None:
             return []
-        return [record.symbol for record in self.context_graph.relevant_symbols_for_task(task_text, limit=limit)]
+        return [
+            record.symbol
+            for record in self.context_graph.relevant_symbols_for_task(
+                task_text, limit=limit
+            )
+        ]
 
     def query_file_symbols(self, path: Path | str) -> list[str]:
         if self.context_graph is None:

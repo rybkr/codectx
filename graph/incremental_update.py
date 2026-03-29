@@ -25,9 +25,7 @@ def classify_file_update(update: FileUpdate, root: Path) -> list[EditResult]:
 
 def actionable_edits(edits: list[EditResult]) -> list[EditResult]:
     return [
-        edit
-        for edit in edits
-        if edit.kind in {EditKind.CONTRACT, EditKind.REMOVED}
+        edit for edit in edits if edit.kind in {EditKind.CONTRACT, EditKind.REMOVED}
     ]
 
 
@@ -71,7 +69,9 @@ def apply_commit(
         old_source = _file_cache.get(path, b"")
         _file_cache[path] = new_source
 
-        updates.append(FileUpdate(path=path, old_source=old_source, new_source=new_source))
+        updates.append(
+            FileUpdate(path=path, old_source=old_source, new_source=new_source)
+        )
 
     edits = apply_file_updates(updates, graph)
     for edit in actionable_edits(edits):

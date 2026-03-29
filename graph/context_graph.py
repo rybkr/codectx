@@ -63,10 +63,16 @@ class ContextGraph:
         ]
 
     def dependents(self, symbol: str) -> list[SymbolRecord]:
-        return [self.symbol(dep) for dep in sorted(self._graph.dependents(symbol)) if self.symbol(dep)]
+        return [
+            self.symbol(dep)
+            for dep in sorted(self._graph.dependents(symbol))
+            if self.symbol(dep)
+        ]
 
     def dependencies(self, symbol: str) -> list[SymbolRecord]:
-        successors = sorted(self._graph._g.successors(symbol)) if self.has_symbol(symbol) else []
+        successors = (
+            sorted(self._graph._g.successors(symbol)) if self.has_symbol(symbol) else []
+        )
         return [self.symbol(dep) for dep in successors if self.symbol(dep)]
 
     def neighbors(self, symbol: str) -> list[SymbolRecord]:
@@ -77,7 +83,9 @@ class ContextGraph:
         }
         return [seen[key] for key in sorted(seen)]
 
-    def subgraph_for_symbols(self, symbols: list[str], depth: int = 1) -> ContextSubgraph:
+    def subgraph_for_symbols(
+        self, symbols: list[str], depth: int = 1
+    ) -> ContextSubgraph:
         frontier = {symbol for symbol in symbols if self.has_symbol(symbol)}
         visited = set(frontier)
         for _ in range(max(0, depth)):
@@ -101,7 +109,9 @@ class ContextGraph:
             edges=edges,
         )
 
-    def relevant_symbols_for_task(self, task_text: str, limit: int = 12) -> list[SymbolRecord]:
+    def relevant_symbols_for_task(
+        self, task_text: str, limit: int = 12
+    ) -> list[SymbolRecord]:
         tokens = {
             token.strip(".,:()[]{}").lower()
             for token in task_text.split()
@@ -114,7 +124,9 @@ class ContextGraph:
             if score:
                 scored.append((score, symbol))
         scored.sort(key=lambda item: (-item[0], item[1]))
-        return [self.symbol(symbol) for _, symbol in scored[:limit] if self.symbol(symbol)]
+        return [
+            self.symbol(symbol) for _, symbol in scored[:limit] if self.symbol(symbol)
+        ]
 
     def invalidate_from_changes(self, changed_symbols: list[str]) -> list[str]:
         impacted = set()

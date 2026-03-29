@@ -26,14 +26,21 @@ class ContextHttpClientTests(unittest.TestCase):
             app = create_app(root)
             with TestClient(app) as test_client:
                 client = ContextHttpClient(base_url="http://testserver")
-                client._get_json = lambda path, params=None: test_client.get(path, params=params).json()
-                client._post_json = lambda path, json: test_client.post(path, json=json).json()
+                client._get_json = lambda path, params=None: test_client.get(
+                    path, params=params
+                ).json()
+                client._post_json = lambda path, json: test_client.post(
+                    path, json=json
+                ).json()
 
                 health = client.health()
                 self.assertEqual(health["status"], "ok")
 
                 symbols = client.symbols_in_file("app/main.py")
-                self.assertEqual([item.symbol for item in symbols], ["app.main.cli", "app.main.helper"])
+                self.assertEqual(
+                    [item.symbol for item in symbols],
+                    ["app.main.cli", "app.main.helper"],
+                )
 
                 update = FileUpdateRequest(
                     path="app/main.py",

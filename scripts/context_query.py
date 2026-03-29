@@ -50,7 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("root", help="path to codebase root")
     parser.add_argument("--file", help="repo-relative python file to inspect")
     parser.add_argument("--task", help="task text to rank relevant symbols for")
-    parser.add_argument("--symbol", help="symbol to expand into a local context subgraph")
+    parser.add_argument(
+        "--symbol", help="symbol to expand into a local context subgraph"
+    )
     parser.add_argument(
         "--depth",
         type=int,

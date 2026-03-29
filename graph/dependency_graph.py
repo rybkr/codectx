@@ -172,21 +172,18 @@ def _qualified_symbol_name(node: Node, module: str) -> str:
 
 
 def _build_graph_from_sources(
-    root: Path,
-    sources: dict[Path, bytes],
+    root: Path, sources: dict[Path, bytes]
 ) -> tuple[nx.DiGraph, dict[str, dict]]:
     graph = nx.DiGraph()
     symbols: dict[str, dict] = {}
     for path in sorted(sources):
-        module = _module_name(path, root)
-        source = sources[path]
+        module, source = _module_name(path, root), sources[path]
         syms = _extract_symbols(source, module)
         symbols.update(syms)
         for qname in syms:
             graph.add_node(qname)
     for path in sorted(sources):
-        module = _module_name(path, root)
-        source = sources[path]
+        module, source = _module_name(path, root), sources[path]
         for caller, callee in _extract_calls(source, module):
             candidates = [symbol for symbol in symbols if symbol.endswith(f".{callee}")]
             for candidate in candidates:

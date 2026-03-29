@@ -47,7 +47,9 @@ class ContextHttpClient:
         payload = self._get_json("/files", params={"path": path})
         return [_symbol_record(item) for item in payload["symbols"]]
 
-    def relevant_symbols_for_task(self, task: str, limit: int = 12) -> list[SymbolRecord]:
+    def relevant_symbols_for_task(
+        self, task: str, limit: int = 12
+    ) -> list[SymbolRecord]:
         payload = self._post_json(
             "/tasks/relevant-symbols",
             json={"task": task, "limit": limit},
