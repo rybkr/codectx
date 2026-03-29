@@ -66,6 +66,14 @@ async def cmd_run(args: argparse.Namespace) -> None:
         await asyncio.gather(watcher.watch(), *[a.run() for a in agents])
 
 
+async def cmd_eval_invalidation(args: argparse.Namespace) -> None:
+    from experiments.harness import run_and_print
+
+    exit_code = await run_and_print(args.scenarios or None)
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cv", description="context-validity toolkit")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -77,6 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     gq.add_argument("root", help="path to codebase root")
     gq.add_argument("symbol", help="qualified symbol e.g. mymodule.my_function")
 
+    ev = sub.add_parser(
+        "eval:invalidation",
+        help="run reproducible invalidation scenarios",
+    )
+    ev.add_argument(
+        "scenarios",
+        nargs="*",
+        help="optional scenario names to run",
+    )
+
     rn = sub.add_parser("run", help="run full multi-agent pipeline")
     rn.add_argument("--config", default="config.yaml", help="path to config.yaml")
 
@@ -84,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 _COMMANDS = {
+    "eval:invalidation": cmd_eval_invalidation,
     "graph:build": cmd_graph_build,
     "graph:query": cmd_graph_query,
     "run": cmd_run,

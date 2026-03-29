@@ -1,0 +1,16 @@
+{
+  "name": "body",
+  "description": "Body-only changes should not invalidate downstream agents.",
+  "changed_files": [
+    "app/calc.py"
+  ],
+  "agents": [
+    {
+      "id": 1,
+      "beliefs": [
+        "app.pipeline.run_pipeline"
+      ]
+    }
+  ],
+  "expected_impacted": {}
+}

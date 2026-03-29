@@ -1,13 +1,19 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
 
-from tree_sitter import Language, Parser, Node
+from tree_sitter import Language, Parser, Node, Query, QueryCursor
 import tree_sitter_python as tspython
 
 PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
+
+FN_QUERY = Query(
+    PY_LANGUAGE,
+    """
+  (function_definition name: (identifier) @fn.name)
+""",
+)
 
 
 class EditKind(Enum):
@@ -37,12 +43,25 @@ def _get_interface(fn_node: Node, source: bytes) -> bytes:
 
 def _fn_nodes_by_name(source: bytes) -> dict[str, Node]:
     tree = parser.parse(source)
-    q = PY_LANGUAGE.query("(function_definition name: (identifier) @name)")
-    result = {}
-    for _, nodes in q.captures(tree.root_node).items():
-        for n in nodes:
-            result[n.text.decode()] = n.parent
+    result: dict[str, Node] = {}
+    captures = QueryCursor(FN_QUERY).captures(tree.root_node)
+    for node in captures.get("fn.name", []):
+        fn_node = node.parent
+        result[_qualified_symbol_name(fn_node)] = fn_node
     return result
+
+
+def _qualified_symbol_name(node: Node) -> str:
+    parts: list[str] = []
+    current: Node | None = node
+    while current:
+        if current.type in {"function_definition", "class_definition"}:
+            name_node = current.child_by_field_name("name")
+            if name_node is not None:
+                parts.append(name_node.text.decode())
+        current = current.parent
+    parts.reverse()
+    return ".".join(parts)
 
 
 def classify_edits(
