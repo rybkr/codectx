@@ -9,6 +9,7 @@ import tree_sitter_python as tspython
 
 log = logging.getLogger("dependency_graph")
 
+# Perhaps we should parse .gitignore in the future.
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".mypy_cache",
@@ -32,6 +33,13 @@ FN_QUERY = Query(
     PY_LANGUAGE,
     """
   (function_definition name: (identifier) @fn.name)
+""",
+)
+
+CLASS_QUERY = Query(
+    PY_LANGUAGE,
+    """
+  (class_definition name: (identifier) @class.name)
 """,
 )
 
@@ -81,6 +89,15 @@ def _iter_source_files(root: Path) -> list[Path]:
 def _extract_symbols(source: bytes, module: str) -> dict[str, dict]:
     tree = parser.parse(source)
     symbols = {}
+    class_captures = QueryCursor(CLASS_QUERY).captures(tree.root_node)
+    for n in class_captures.get("class.name", []):
+        class_node = n.parent
+        qname = _qualified_symbol_name(class_node, module)
+        symbols[qname] = {
+            "node": class_node,
+            "kind": "class",
+            "interface_hash": _class_interface_hash(class_node, source),
+        }
     captures = QueryCursor(FN_QUERY).captures(tree.root_node)
     for n in captures.get("fn.name", []):
         fn_node = n.parent
@@ -101,12 +118,20 @@ def _interface_hash(fn_node: Node, source: bytes) -> int:
     return hash(b"".join(parts))
 
 
+def _class_interface_hash(class_node: Node, source: bytes) -> int:
+    parts = []
+    for child in class_node.children:
+        if child.type in {"argument_list", "type_parameter"}:
+            parts.append(source[child.start_byte : child.end_byte])
+    return hash(b"".join(parts))
+
+
 def _extract_calls(source: bytes, module: str) -> list[tuple[str, str]]:
     tree = parser.parse(source)
     edges = []
     captures = QueryCursor(CALL_QUERY).captures(tree.root_node)
     for cap_name, nodes in captures.items():
-        if cap_name == "call.name":
+        if cap_name in {"call.name", "call.attr"}:
             for n in nodes:
                 caller = _enclosing_function(n, module)
                 if caller:
@@ -171,6 +196,10 @@ class DependencyGraph:
         candidates = [s for s in self._symbols if s.endswith(f".{callee_name}")]
         for callee in candidates:
             self._g.add_edge(caller, callee)
+            if self._symbols[callee]["kind"] == "class":
+                init_symbol = f"{callee}.__init__"
+                if init_symbol in self._symbols:
+                    self._g.add_edge(caller, init_symbol)
 
     def dependents(self, symbol: str) -> set[str]:
         return nx.ancestors(self._g, symbol)

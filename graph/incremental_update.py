@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from graph.dependency_graph import DependencyGraph
-from graph.dependency import EXCLUDED_DIR_NAMES, _iter_source_files
+from graph.dependency_graph import EXCLUDED_DIR_NAMES, _iter_source_files
 from graph.semantic_diff import classify_edits, EditKind, EditResult
 
 log = logging.getLogger("incremental_update")
