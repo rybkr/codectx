@@ -113,6 +113,25 @@ async def cmd_eval_invalidation(args: argparse.Namespace) -> None:
         raise SystemExit(exit_code)
 
 
+async def cmd_context_serve(args: argparse.Namespace) -> None:
+    import uvicorn
+
+    from server.context_server import create_app
+
+    root = Path(args.root)
+    if not root.exists():
+        raise SystemExit(f"error: path does not exist: {root}")
+
+    config = uvicorn.Config(
+        app=create_app(root),
+        host=args.host,
+        port=args.port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cv", description="context-validity toolkit")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -135,6 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
     cq.add_argument("--depth", type=int, default=1, help="subgraph expansion depth for --symbol")
     cq.add_argument("--limit", type=int, default=12, help="max symbols to return for --task")
 
+    cs = sub.add_parser(
+        "context:serve",
+        help="serve the shared context graph over HTTP",
+    )
+    cs.add_argument("root", help="path to codebase root")
+    cs.add_argument("--host", default="127.0.0.1", help="bind host")
+    cs.add_argument("--port", type=int, default=8000, help="bind port")
+
     ev = sub.add_parser(
         "eval:invalidation",
         help="run reproducible invalidation scenarios",
@@ -153,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 _COMMANDS = {
     "context:query": cmd_context_query,
+    "context:serve": cmd_context_serve,
     "eval:invalidation": cmd_eval_invalidation,
     "graph:build": cmd_graph_build,
     "graph:query": cmd_graph_query,
