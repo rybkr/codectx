@@ -18,7 +18,7 @@ class FileUpdateRequest:
 class ContextHttpClient:
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8000",
+        base_url: str = "http://127.0.0.1:27962",
         *,
         timeout: float = 10.0,
     ):

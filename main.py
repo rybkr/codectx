@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("root", nargs="?", default=".", help="path to codebase root")
     parser.add_argument("--host", default="127.0.0.1", help="bind host")
-    parser.add_argument("--port", type=int, default=8000, help="bind port")
+    parser.add_argument("--port", type=int, default=27962, help="bind port")
     parser.add_argument(
         "--instructions-file",
         help="repo-relative path to the agent instructions file to update",
