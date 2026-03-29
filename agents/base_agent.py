@@ -11,12 +11,14 @@ from agents.beliefs import (
     BeliefStore,
     module_symbol_for_path,
 )
+from graph.context_graph import ContextGraph
 
 
 class BaseAgent(ABC):
-    def __init__(self, id: int, cfg: dict):
+    def __init__(self, id: int, cfg: dict, context_graph: ContextGraph | None = None):
         self.id: int = id
         self.cfg: dict = cfg
+        self.context_graph = context_graph
         self.beliefs = BeliefStore()
         self._inbox: asyncio.Queue = asyncio.Queue()
 
@@ -118,6 +120,16 @@ class BaseAgent(ABC):
                 confidence=confidence,
                 metadata={"path": str(path)},
             )
+
+    def query_relevant_symbols(self, task_text: str, limit: int = 12) -> list[str]:
+        if self.context_graph is None:
+            return []
+        return [record.symbol for record in self.context_graph.relevant_symbols_for_task(task_text, limit=limit)]
+
+    def query_file_symbols(self, path: Path | str) -> list[str]:
+        if self.context_graph is None:
+            return []
+        return [record.symbol for record in self.context_graph.symbols_in_file(path)]
 
     @abstractmethod
     async def run(self) -> None:
