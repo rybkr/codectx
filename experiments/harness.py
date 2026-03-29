@@ -6,7 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from agents.base_agent import BaseAgent, Belief
+from agents.base_agent import BaseAgent
+from agents.beliefs import Belief, BeliefKind, BeliefSource
 from detection.context_manager import ContextManager
 from detection.invalidation_engine import InvalidationEngine
 from graph.dependency_graph import DependencyGraph
@@ -59,8 +60,12 @@ class ExperimentHarness:
 
     def _load_scenarios(self) -> tuple[EvalScenario, ...]:
         scenarios: list[EvalScenario] = []
-        for scenario_dir in sorted(path for path in self.cases_dir.iterdir() if path.is_dir()):
-            manifest = json.loads((scenario_dir / "case.json").read_text(encoding="utf-8"))
+        for scenario_dir in sorted(
+            path for path in self.cases_dir.iterdir() if path.is_dir()
+        ):
+            manifest = json.loads(
+                (scenario_dir / "case.json").read_text(encoding="utf-8")
+            )
             scenarios.append(
                 EvalScenario(
                     name=manifest["name"],
@@ -111,7 +116,8 @@ class ExperimentHarness:
             )
 
             actual = {
-                agent.id: tuple(sorted(agent.beliefs.stale_symbols())) for agent in agents
+                agent.id: tuple(sorted(agent.beliefs.stale_symbols()))
+                for agent in agents
             }
             expected = {
                 agent_id: tuple(sorted(symbols))
@@ -136,7 +142,9 @@ class ExperimentHarness:
                 "inbox_sizes": inbox_sizes,
             }
 
-    def _write_version(self, destination: Path, scenario: EvalScenario, *, suffix: str) -> None:
+    def _write_version(
+        self, destination: Path, scenario: EvalScenario, *, suffix: str
+    ) -> None:
         for relative_path in self._scenario_python_paths(scenario, suffix):
             source = scenario.root / self._fixture_name(relative_path, suffix)
             target = destination / relative_path
@@ -174,7 +182,14 @@ class ExperimentHarness:
         for seed in seeds:
             agent = EvalAgent(id=seed.id, cfg={})
             for symbol in seed.beliefs:
-                agent.beliefs.add(Belief(symbol=symbol, kind="code", value="seeded"))
+                agent.beliefs.add(
+                    Belief(
+                        symbol=symbol,
+                        kind=BeliefKind.TASK_DEPENDENCY,
+                        value="seeded",
+                        source=BeliefSource.TASK,
+                    )
+                )
             agents.append(agent)
         return agents
 
