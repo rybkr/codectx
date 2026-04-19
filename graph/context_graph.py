@@ -1,23 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
+from core.models import ContextSubgraph, Symbol, SymbolKind
 from graph.dependency_graph import DependencyGraph
-
-
-@dataclass(frozen=True)
-class SymbolRecord:
-    symbol: str
-    kind: str
-    interface_hash: int | None
-
-
-@dataclass(frozen=True)
-class ContextSubgraph:
-    center_symbols: tuple[str, ...]
-    nodes: tuple[str, ...]
-    edges: tuple[tuple[str, str], ...]
 
 
 class ContextGraph:
@@ -28,33 +14,37 @@ class ContextGraph:
     def root(self) -> Path:
         return self._graph.root
 
+    @property
+    def dependency_graph(self) -> DependencyGraph:
+        return self._graph
+
     async def build(self) -> None:
         await self._graph.build()
 
     def has_symbol(self, symbol: str) -> bool:
-        return symbol in self._graph._symbols
+        return self._graph.has_symbol(symbol)
 
-    def symbol(self, symbol: str) -> SymbolRecord | None:
-        data = self._graph._symbols.get(symbol)
+    def symbol(self, symbol: str) -> Symbol | None:
+        data = self._graph.symbol_data(symbol)
         if data is None:
             return None
-        return SymbolRecord(
+        return Symbol(
             symbol=symbol,
-            kind=str(data.get("kind", "unknown")),
+            kind=self._symbol_kind(data.get("kind")),
             interface_hash=data.get("interface_hash"),
         )
 
-    def all_symbols(self) -> list[SymbolRecord]:
+    def all_symbols(self) -> list[Symbol]:
         return [
-            SymbolRecord(
+            Symbol(
                 symbol=symbol,
-                kind=str(data.get("kind", "unknown")),
+                kind=self._symbol_kind(data.get("kind")),
                 interface_hash=data.get("interface_hash"),
             )
-            for symbol, data in sorted(self._graph._symbols.items())
+            for symbol, data in self._graph.symbol_items()
         ]
 
-    def symbols_in_file(self, path: Path | str) -> list[SymbolRecord]:
+    def symbols_in_file(self, path: Path | str) -> list[Symbol]:
         module = self._module_name(path)
         return [
             record
@@ -62,26 +52,19 @@ class ContextGraph:
             if record.symbol == module or record.symbol.startswith(f"{module}.")
         ]
 
-    def dependents(self, symbol: str) -> list[SymbolRecord]:
+    def dependents(self, symbol: str) -> list[Symbol]:
         return [
             self.symbol(dep)
             for dep in sorted(self._graph.dependents(symbol))
-            if self.symbol(dep)
+            if self.symbol(dep) is not None
         ]
 
-    def dependencies(self, symbol: str) -> list[SymbolRecord]:
-        successors = (
-            sorted(self._graph._g.successors(symbol)) if self.has_symbol(symbol) else []
-        )
-        return [self.symbol(dep) for dep in successors if self.symbol(dep)]
-
-    def neighbors(self, symbol: str) -> list[SymbolRecord]:
-        seen = {
-            record.symbol: record
-            for record in [*self.dependencies(symbol), *self.dependents(symbol)]
-            if record is not None
-        }
-        return [seen[key] for key in sorted(seen)]
+    def dependencies(self, symbol: str) -> list[Symbol]:
+        return [
+            self.symbol(dep)
+            for dep in self._graph.successors(symbol)
+            if self.symbol(dep) is not None
+        ]
 
     def subgraph_for_symbols(
         self, symbols: list[str], depth: int = 1
@@ -99,7 +82,7 @@ class ContextGraph:
         edges = tuple(
             sorted(
                 (source, target)
-                for source, target in self._graph._g.edges()
+                for source, target in self._graph.edges()
                 if source in visited and target in visited
             )
         )
@@ -111,14 +94,14 @@ class ContextGraph:
 
     def relevant_symbols_for_task(
         self, task_text: str, limit: int = 12
-    ) -> list[SymbolRecord]:
+    ) -> list[Symbol]:
         tokens = {
             token.strip(".,:()[]{}").lower()
             for token in task_text.split()
             if len(token.strip(".,:()[]{}")) >= 3
         }
         scored: list[tuple[int, str]] = []
-        for symbol in self._graph._symbols:
+        for symbol, _ in self._graph.symbol_items():
             haystack = symbol.lower()
             score = sum(1 for token in tokens if token in haystack)
             if score:
@@ -142,3 +125,11 @@ class ContextGraph:
         if not path_obj.is_absolute():
             path_obj = self.root / path_obj
         return ".".join(path_obj.relative_to(self.root).with_suffix("").parts)
+
+    def _symbol_kind(self, raw_kind: object) -> SymbolKind:
+        if isinstance(raw_kind, SymbolKind):
+            return raw_kind
+        try:
+            return SymbolKind(str(raw_kind).lower())
+        except ValueError:
+            return SymbolKind.UNKNOWN

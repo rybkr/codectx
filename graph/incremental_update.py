@@ -3,7 +3,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from graph.dependency_graph import DependencyGraph
-from graph.dependency_graph import EXCLUDED_DIR_NAMES, _iter_source_files
 from graph.semantic_diff import classify_edits, EditKind, EditResult
 
 log = logging.getLogger("incremental_update")
@@ -37,8 +36,6 @@ def apply_file_updates(
     overrides: dict[Path, bytes] = {}
     for update in updates:
         if update.path.suffix != ".py":
-            continue
-        if any(part in EXCLUDED_DIR_NAMES for part in update.path.parts):
             continue
         try:
             update.path.relative_to(graph.root)

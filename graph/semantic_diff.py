@@ -1,9 +1,9 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from enum import Enum, auto
 
-from tree_sitter import Language, Parser, Node, Query, QueryCursor
+from tree_sitter import Language, Node, Parser, Query, QueryCursor
 import tree_sitter_python as tspython
+
+from core.models import EditKind, EditResult
 
 PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
@@ -14,21 +14,6 @@ FN_QUERY = Query(
   (function_definition name: (identifier) @fn.name)
 """,
 )
-
-
-class EditKind(Enum):
-    CONTRACT = auto()
-    INTERNAL = auto()
-    ADDED = auto()
-    REMOVED = auto()
-
-
-@dataclass
-class EditResult:
-    symbol: str
-    kind: EditKind
-    old_interface: bytes | None = None
-    new_interface: bytes | None = None
 
 
 def _get_interface(fn_node: Node, source: bytes) -> bytes:
@@ -92,3 +77,6 @@ def classify_edits(
         if name not in new_fns:
             results.append(EditResult(f"{module}.{name}", EditKind.REMOVED))
     return results
+
+
+__all__ = ["EditKind", "EditResult", "classify_edits"]

@@ -1,205 +1,22 @@
 from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
 import networkx as nx
 
-from tree_sitter import Language, Parser, Node, Query, QueryCursor
-import tree_sitter_python as tspython
+from graph.indexer import build_graph_from_disk
+from graph.languages.base import SymbolDef
+
 
 log = logging.getLogger("dependency_graph")
-
-# Perhaps we should parse .gitignore in the future.
-EXCLUDED_DIR_NAMES = {
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "site-packages",
-    "dist-packages",
-}
-
-PY_LANGUAGE = Language(tspython.language())
-parser = Parser()
-parser.language = PY_LANGUAGE
-
-FN_QUERY = Query(
-    PY_LANGUAGE,
-    """
-  (function_definition name: (identifier) @fn.name)
-""",
-)
-
-CLASS_QUERY = Query(
-    PY_LANGUAGE,
-    """
-  (class_definition name: (identifier) @class.name)
-""",
-)
-
-CALL_QUERY = Query(
-    PY_LANGUAGE,
-    """
-    (call function: (identifier) @call.name)
-    (call function: (attribute object: (identifier) @call.obj
-         attribute: (identifier) @call.attr))
-""",
-)
-
-IMPORT_QUERY = Query(
-    PY_LANGUAGE,
-    """
-            (import_statement name: (dotted_name) @import)
-(import_from_statement module_name: (dotted_name) @import.from
-                              name: (dotted_name) @import.name)
-""",
-)
-
-
-def _module_name(path: Path, root: Path) -> str:
-    return ".".join(path.relative_to(root).with_suffix("").parts)
-
-
-def _iter_source_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            dirname for dirname in dirnames if dirname not in EXCLUDED_DIR_NAMES
-        ]
-        current_dir = Path(dirpath)
-        if any(part in EXCLUDED_DIR_NAMES for part in current_dir.parts):
-            continue
-        for filename in filenames:
-            if not filename.endswith(".py"):
-                continue
-            path = current_dir / filename
-            if any(part in EXCLUDED_DIR_NAMES for part in path.parts):
-                continue
-            files.append(path)
-    files.sort()
-    return files
-
-
-def _is_trackable_source_path(path: Path, root: Path) -> bool:
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return False
-    if path.suffix != ".py":
-        return False
-    return not any(part in EXCLUDED_DIR_NAMES for part in relative.parts)
-
-
-def _extract_symbols(source: bytes, module: str) -> dict[str, dict]:
-    tree = parser.parse(source)
-    symbols = {}
-    class_captures = QueryCursor(CLASS_QUERY).captures(tree.root_node)
-    for n in class_captures.get("class.name", []):
-        class_node = n.parent
-        qname = _qualified_symbol_name(class_node, module)
-        symbols[qname] = {
-            "node": class_node,
-            "kind": "class",
-            "interface_hash": _class_interface_hash(class_node, source),
-        }
-    captures = QueryCursor(FN_QUERY).captures(tree.root_node)
-    for n in captures.get("fn.name", []):
-        fn_node = n.parent
-        qname = _qualified_symbol_name(fn_node, module)
-        symbols[qname] = {
-            "node": fn_node,
-            "kind": "function",
-            "interface_hash": _interface_hash(fn_node, source),
-        }
-    return symbols
-
-
-def _interface_hash(fn_node: Node, source: bytes) -> int:
-    parts = []
-    for child in fn_node.children:
-        if child.type in ("parameters", "type"):
-            parts.append(source[child.start_byte : child.end_byte])
-    return hash(b"".join(parts))
-
-
-def _class_interface_hash(class_node: Node, source: bytes) -> int:
-    parts = []
-    for child in class_node.children:
-        if child.type in {"argument_list", "type_parameter"}:
-            parts.append(source[child.start_byte : child.end_byte])
-    return hash(b"".join(parts))
-
-
-def _extract_calls(source: bytes, module: str) -> list[tuple[str, str]]:
-    tree = parser.parse(source)
-    edges = []
-    captures = QueryCursor(CALL_QUERY).captures(tree.root_node)
-    for cap_name, nodes in captures.items():
-        if cap_name in {"call.name", "call.attr"}:
-            for n in nodes:
-                caller = _enclosing_function(n, module)
-                if caller:
-                    edges.append((caller, n.text.decode()))
-    return edges
-
-
-def _enclosing_function(node: Node, module: str) -> str | None:
-    current = node.parent
-    while current:
-        if current.type == "function_definition":
-            return _qualified_symbol_name(current, module)
-        current = current.parent
-    return None
-
-
-def _qualified_symbol_name(node: Node, module: str) -> str:
-    parts: list[str] = []
-    current: Node | None = node
-    while current:
-        if current.type in {"function_definition", "class_definition"}:
-            name_node = current.child_by_field_name("name")
-            if name_node is not None:
-                parts.append(name_node.text.decode())
-        current = current.parent
-    parts.reverse()
-    return ".".join([module, *parts])
-
-
-def _build_graph_from_sources(
-    root: Path, sources: dict[Path, bytes]
-) -> tuple[nx.DiGraph, dict[str, dict]]:
-    graph = nx.DiGraph()
-    symbols: dict[str, dict] = {}
-    for path in sorted(sources):
-        module, source = _module_name(path, root), sources[path]
-        syms = _extract_symbols(source, module)
-        symbols.update(syms)
-        for qname in syms:
-            graph.add_node(qname)
-    for path in sorted(sources):
-        module, source = _module_name(path, root), sources[path]
-        for caller, callee in _extract_calls(source, module):
-            candidates = [symbol for symbol in symbols if symbol.endswith(f".{callee}")]
-            for candidate in candidates:
-                graph.add_edge(caller, candidate)
-                if symbols[candidate]["kind"] == "class":
-                    init_symbol = f"{candidate}.__init__"
-                    if init_symbol in symbols:
-                        graph.add_edge(caller, init_symbol)
-    return graph, symbols
 
 
 class DependencyGraph:
     def __init__(self, root: Path):
         self.root: Path = root
         self._g: nx.DiGraph = nx.DiGraph()
-        self._symbols: dict[str, dict] = {}
+        self._symbols: dict[str, SymbolDef] = {}
 
     async def build(self) -> None:
         import asyncio
@@ -207,31 +24,46 @@ class DependencyGraph:
         await asyncio.to_thread(self._build_sync)
 
     def _build_sync(self) -> None:
-        sources = {path: path.read_bytes() for path in _iter_source_files(self.root)}
-        self._g, self._symbols = _build_graph_from_sources(self.root, sources)
+        self._g, self._symbols = build_graph_from_disk(self.root)
         log.info(
             "graph built: %d nodes, %d edges",
             self._g.number_of_nodes(),
             self._g.number_of_edges(),
         )
 
-    def _add_edge_if_known(self, caller: str, callee_name: str) -> None:
-        candidates = [s for s in self._symbols if s.endswith(f".{callee_name}")]
-        for callee in candidates:
-            self._g.add_edge(caller, callee)
-            if self._symbols[callee]["kind"] == "class":
-                init_symbol = f"{callee}.__init__"
-                if init_symbol in self._symbols:
-                    self._g.add_edge(caller, init_symbol)
-
     def dependents(self, symbol: str) -> set[str]:
+        if symbol not in self._g:
+            return set()
         return nx.ancestors(self._g, symbol)
 
     def interface_hash(self, symbol: str) -> int | None:
         return self._symbols.get(symbol, {}).get("interface_hash")
 
-    def update_file(self, path: Path) -> set[str]:
-        return self.rebuild_with_overrides({path: path.read_bytes()})
+    def has_symbol(self, symbol: str) -> bool:
+        return symbol in self._symbols
+
+    def symbol_data(self, symbol: str) -> dict | None:
+        return self._symbols.get(symbol)
+
+    def symbol_items(self) -> list[tuple[str, dict]]:
+        return sorted(self._symbols.items())
+
+    def successors(self, symbol: str) -> list[str]:
+        if symbol not in self._g:
+            return []
+        return sorted(self._g.successors(symbol))
+
+    def edges(self) -> list[tuple[str, str]]:
+        return list(self._g.edges())
+
+    def node_count(self) -> int:
+        return self._g.number_of_nodes()
+
+    def edge_count(self) -> int:
+        return self._g.number_of_edges()
+
+    def symbols(self) -> list[str]:
+        return [symbol for symbol, _ in self.symbol_items()]
 
     def rebuild_with_overrides(self, overrides: dict[Path, bytes | None]) -> set[str]:
         old_symbols = dict(self._symbols)
