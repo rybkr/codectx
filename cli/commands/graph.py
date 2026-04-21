@@ -6,6 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from cli.output import print_heading, print_kv, print_list
+from graph.models import SymbolKind
 
 
 def _graph_export(
@@ -16,18 +17,18 @@ def _graph_export(
         "root": str(root.resolve()),
         "nodes": graph.node_count(),
         "edges": graph.edge_count(),
-        "format": "codectx.dependency_graph.v1",
+        "format": "codectx.symbol_graph.v2",
     }
     nodes: list[dict[str, object]] = []
 
-    for qname, symbol in graph.symbol_items():
+    for symbol in graph.symbol_items():
         nodes.append(
             {
                 "type": "node",
-                "symbol": qname,
+                "symbol": symbol.qname,
                 "kind": symbol.kind,
                 "interface_hash": symbol.interface_hash,
-                "dependencies": graph.successors(qname),
+                "dependencies": graph.successors(symbol.qname),
             }
         )
 
@@ -35,13 +36,13 @@ def _graph_export(
 
 
 async def run_build(args: Namespace) -> int:
-    from graph.dependency_graph import DependencyGraph
+    from graph.symbol_graph import SymbolGraph
 
     root = Path(args.root)
     if not root.exists():
         raise SystemExit(f"error: path does not exist: {root}")
 
-    graph = DependencyGraph(root=root)
+    graph = SymbolGraph(root=root)
     await graph.build()
 
     metadata, nodes = _graph_export(root, graph)
@@ -65,13 +66,13 @@ async def run_build(args: Namespace) -> int:
 
 
 async def run_dependents(args: Namespace) -> int:
-    from graph.dependency_graph import DependencyGraph
+    from graph.symbol_graph import SymbolGraph
 
     root = Path(args.root)
     if not root.exists():
         raise SystemExit(f"error: path does not exist: {root}")
 
-    graph = DependencyGraph(root=root)
+    graph = SymbolGraph(root=root)
     await graph.build()
 
     dependents = sorted(graph.dependents(args.symbol))
@@ -87,8 +88,8 @@ async def run_dependents(args: Namespace) -> int:
 def register(subparsers, formatter_class) -> None:
     parser = subparsers.add_parser(
         "graph",
-        help="Inspect dependency graph structure",
-        description="Build and inspect the repository dependency graph.",
+        help="Inspect symbol graph structure",
+        description="Build and inspect the repository symbol graph.",
         formatter_class=formatter_class,
     )
     graph_subparsers = parser.add_subparsers(dest="graph_command", metavar="command")
@@ -96,9 +97,9 @@ def register(subparsers, formatter_class) -> None:
 
     build_parser = graph_subparsers.add_parser(
         "build",
-        help="Build the dependency graph and export it as NDJSON",
+        help="Build the symbol graph and export it as NDJSON",
         description=(
-            "Build the dependency graph for a repository and export it as NDJSON. "
+            "Build the symbol graph for a repository and export it as NDJSON. "
             "The first line is metadata and each subsequent line is a node record."
         ),
         formatter_class=formatter_class,
@@ -116,7 +117,7 @@ def register(subparsers, formatter_class) -> None:
     dependents_parser = graph_subparsers.add_parser(
         "dependents",
         help="Show dependents of a symbol",
-        description="Show the transitive dependents for a symbol in the dependency graph.",
+        description="Show the transitive dependents for a symbol in the symbol graph.",
         formatter_class=formatter_class,
     )
     dependents_parser.add_argument(

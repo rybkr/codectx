@@ -1,10 +1,7 @@
-from core.models import ContextSubgraph, Symbol
-from graph.context_graph import ContextGraph
-from graph.dependency_graph import DependencyGraph
+from graph.models import Symbol
+from graph.symbol_graph import SymbolGraph
 
 __all__ = [
-    "ContextGraph",
-    "ContextSubgraph",
-    "DependencyGraph",
     "Symbol",
+    "SymbolGraph",
 ]

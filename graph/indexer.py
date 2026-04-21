@@ -6,9 +6,7 @@ from pathspec import GitIgnoreSpec
 import networkx as nx
 from dataclasses import dataclass
 
-from core.models import SymbolKind
 from graph.languages import adapter_for_path
-from graph.languages.base import ParsedFile
 
 
 EXCLUDED_DIR_NAMES: set[str] = {".git"}
@@ -26,7 +24,7 @@ class GitIgnoreMatcher:
         self._cache: dict[Path, tuple[IgnoreLayer, ...]] = {}
 
     def ignores(self, path: Path, *, is_dir: bool) -> bool:
-        path: Path = path if path.is_absolute else self.root / path
+        path: Path = path if path.is_absolute() else self.root / path
 
         try:
             path.relative_to(self.root)
@@ -68,40 +66,7 @@ class GitIgnoreMatcher:
         return layers
 
 
-def build_graph_from_disk(root: Path) -> tuple[nx.DiGraph, dict[str, SymbolDef]]:
-    return build_graph_from_sources(
-        root, {path: path.read_bytes() for path, _ in iter_trackable_files(root)}
-    )
-
-
-def build_graph_from_sources(
-    root: Path, sources: dict[Path, bytes]
-) -> tuple[nx.DiGraph, dict[str, SymbolDef]]:
-    root: Path = root.resolve()
-    graph = nx.DiGraph()
-    symbols: dict[str, SymbolDef] = {}
-    parsed_files: list[ParsedFile] = []
-
-    for path in sources.keys():
-        adapter: LanguageAdapter = adapter_for_path(path)
-        if adapter is None:
-            continue
-
-        parsed_file: ParsedFile = adapter.parse_file(path, sources[path], root)
-        parsed_files.append(parsed_file)
-        for symbol in parsed_file.symbols:
-            symbols[symbol.qname] = symbol
-            graph.add_node(symbol.qname)
-
-    for parsed_file in parsed_files:
-        for ref in parsed_file.refs:
-            for target in _resolve_ref(ref, symbols):
-                graph.add_edge(ref.source_symbol, target)
-
-    return graph, symbols
-
-
-def iter_trackable_files(root: Path) -> Iterator[tuple[Path, LanguageAdapter]]:
+def iter_source_files(root: Path) -> Iterator[tuple[Path, LanguageAdapter]]:
     root: Path = root.resolve()
     ignore_matcher = GitIgnoreMatcher(root)
 
@@ -130,19 +95,3 @@ def iter_trackable_files(root: Path) -> Iterator[tuple[Path, LanguageAdapter]]:
                 continue
 
             yield path, adapter
-
-
-def _resolve_ref(ref: SymbolRef, symbols: dict[str, SymbolDef]) -> list[str]:
-    targets: list[str] = [
-        symbol for symbol in symbols.keys() if symbol.endswith(f".{ref.target_name}")
-    ]
-
-    expanded: list[str] = []
-    for symbol in targets:
-        expanded.append(symbol)
-        if symbols[symbol].kind == SymbolKind.CLASS:
-            init_symbol = f"{symbol}.__init__"
-            if init_symbol in symbols:
-                expanded.append(init_symbol)
-
-    return expanded
