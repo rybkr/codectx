@@ -48,6 +48,16 @@ class AgentSession:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "agent_id": self.agent_id,
+            "name": self.name,
+            "task": self.task,
+            "started_at": self.started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "last_seen_at": self.last_seen_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
 
 def new_id() -> str:
     return uuid4().hex

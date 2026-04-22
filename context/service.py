@@ -143,7 +143,15 @@ class ContextService:
         return self.invalidate_symbols(changed_symbols)
 
     def invalidate_symbols(self, changed_symbols: set[str]) -> ImpactReport:
-        return self._engine.impacted_symbols(changed_symbols)
+        report: ImpactReport = self._engine._impacted_symbols(changed_symbols)
+        affected_agents: tuple[AgentSession, ...] = self._agents.affected_agents(
+            set(report.impacted_symbols)
+        )
+        return ImpactReport(
+            changed_symbols=report.changed_symbols,
+            impacted_symbols=report.impacted_symbols,
+            affected_agents=affected_agents,
+        )
 
     def register_agent(self, name: str, task: str) -> AgentSession:
         return self._agents.register_agent(name, task)
