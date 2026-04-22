@@ -6,7 +6,6 @@ from argparse import Namespace
 from pathlib import Path
 
 from cli.output import print_heading, print_kv, print_list
-from graph.models import SymbolKind
 
 
 def _graph_export(
@@ -15,8 +14,8 @@ def _graph_export(
     metadata: dict = {
         "type": "metadata",
         "root": str(root.resolve()),
-        "nodes": graph.node_count(),
-        "edges": graph.edge_count(),
+        "nodes": graph.symbol_count(),
+        "edges": graph.ref_count(),
         "format": "codectx.symbol_graph.v2",
     }
     nodes: list[dict[str, object]] = []

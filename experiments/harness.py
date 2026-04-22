@@ -98,7 +98,7 @@ class ExperimentHarness:
         return [by_name[name] for name in scenario_names]
 
     async def _run_scenario(self, scenario: EvalScenario) -> dict[str, Any]:
-        with TemporaryDirectory(prefix="async-eval-") as tmpdir:
+        with TemporaryDirectory(prefix="codectx-eval-") as tmpdir:
             root = Path(tmpdir)
             self._write_version(root, scenario, suffix=".before.py")
 

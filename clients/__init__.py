@@ -1,3 +1,4 @@
-from clients.context_http import ContextHttpClient, FileUpdateRequest
+from clients.context_http import ContextHttpClient
+from core.models import FileUpdate
 
-__all__ = ["ContextHttpClient", "FileUpdateRequest"]
+__all__ = ["ContextHttpClient", "FileUpdate"]
