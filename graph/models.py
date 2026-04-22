@@ -41,6 +41,20 @@ class Symbol:
     interface_hash: int | None = None
     body_hash: int | None = None
 
+    @property
+    def body(self) -> str | None:
+        if self.span is None:
+            return None
+        return self.path.read_bytes()[self.span.start_byte : self.span.end_byte].decode(
+            "utf-8"
+        )
+
+    @property
+    def summary(self) -> str:
+        if self.body is None:
+            return self.qname
+        return f"{self.qname}: {'\n'.join(self.body.splitlines()[:6])}"
+
 
 @dataclass(frozen=True)
 class SymbolRef:
