@@ -63,6 +63,7 @@ class SymbolGraph:
             ):
                 changed.add(qname)
         changed.update(set(old_symbols.keys()) - set(self._symbols.keys()))
+
         return changed
 
     def has_symbol(self, qname: str) -> bool:
@@ -87,9 +88,7 @@ class SymbolGraph:
 
     def symbols_in_file(self, path: Path) -> list[str]:
         return [
-            symbol
-            for symbol in self._symbols.values()
-            if symbol.path == path.resolve()
+            symbol for symbol in self._symbols.values() if symbol.path == path.resolve()
         ]
 
     def refs(self, **attrs) -> list[ResolvedRef]:
@@ -116,6 +115,9 @@ class SymbolGraph:
             for *_, d in self._g.edges(data=True)
             if all(d.get(k) == v for k, v in attrs.items())
         )
+
+    def unresolved_ref_count(self) -> int:
+        return len(self._unresolved_refs)
 
     def successors(self, qname: str, **attrs) -> list[str]:
         seen: set[str] = set()

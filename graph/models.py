@@ -26,6 +26,17 @@ class SourceSpan:
     end_col: int
     end_byte: int
 
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "start_line": self.start_line,
+            "start_col": self.start_col,
+            "start_byte": self.start_byte,
+            "end_line": self.end_line,
+            "end_col": self.end_col,
+            "end_byte": self.end_byte,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class Symbol:
@@ -42,6 +53,27 @@ class Symbol:
     body_hash: int | None = None
 
     @property
+    def payload(self) -> dict[str, object]:
+        result = {
+            "qname": self.qname,
+            "name": self.name,
+            "kind": self.kind.value,
+            "path": str(self.path),
+            "module": self.module,
+            "language": self.language,
+            "interface_hash": self.interface_hash,
+        }
+        if self.parent_qname is not None:
+            result["parent_qname"] = self.parent_qname
+        if self.span is not None:
+            result["span"] = self.span.payload
+        if self.name_span is not None:
+            result["name_span"] = self.name_span.payload
+        if self.body_hash is not None:
+            result["body_hash"] = self.body_hash
+        return result
+
+    @property
     def body(self) -> str | None:
         if self.span is None:
             return None
@@ -54,6 +86,21 @@ class Symbol:
         if self.body is None:
             return self.qname
         return f"{self.qname}: {'\n'.join(self.body.splitlines()[:6])}"
+
+
+@dataclass(frozen=True)
+class SymbolDetails:
+    record: Symbol
+    dependencies: tuple[Symbol, ...]
+    dependents: tuple[Symbol, ...]
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "record": self.record.payload,
+            "dependencies": [d.payload for d in self.dependencies],
+            "dependents": [d.payload for d in self.dependents],
+        }
 
 
 @dataclass(frozen=True)
@@ -116,3 +163,18 @@ class EditResult:
     kind: EditKind
     old_interface: bytes | None = None
     new_interface: bytes | None = None
+
+
+@dataclass(frozen=True)
+class BuildReport:
+    root: Path
+    symbols: int
+    unresolved_refs: int
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "root": str(self.root),
+            "symbols": self.symbols,
+            "unresolved_refs": self.unresolved_refs,
+        }
