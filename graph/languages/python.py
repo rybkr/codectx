@@ -70,11 +70,11 @@ class PythonAdapter(LanguageAdapter):
 
     def parse_file(self, path: Path, source: bytes, root: Path) -> ParsedFile:
         module: str = self.module_name(path, root)
-        rel_path: Path = path.relative_to(root)
+        abs_path: Path = path.resolve()
         tree_root: Node = self._parser.parse(source).root_node
         return ParsedFile(
             module=module,
-            symbols=self._extract_symbols(tree_root, module, rel_path, source),
+            symbols=self._extract_symbols(tree_root, module, abs_path, source),
             refs=self._extract_refs(tree_root, module),
             imports=self._extract_imports(tree_root),
         )
@@ -106,7 +106,7 @@ class PythonAdapter(LanguageAdapter):
         return edit_results
 
     def _extract_symbols(
-        self, root: Node, module: str, rel_path: Path, source: bytes
+        self, root: Node, module: str, abs_path: Path, source: bytes
     ) -> list[Symbol]:
         symbols: list[Symbol] = []
 
@@ -119,7 +119,7 @@ class PythonAdapter(LanguageAdapter):
                         qname=self._qualified_symbol_name(name_node, module),
                         name=name_node.text.decode(),
                         kind=symbol_kind,
-                        path=rel_path,
+                        path=abs_path,
                         module=module,
                         language=self.name,
                         parent_qname=self._parent_symbol_name(declaration_node, module),
@@ -137,7 +137,7 @@ class PythonAdapter(LanguageAdapter):
                 qname=module,
                 name=module.rsplit(".", 1)[-1],
                 kind=SymbolKind.MODULE,
-                path=rel_path,
+                path=abs_path,
                 module=module,
                 language=self.name,
                 parent_qname=None,
@@ -318,7 +318,7 @@ class PythonAdapter(LanguageAdapter):
 
     def _interface_hash(
         self, symbol_kind: SymbolKind, node: Node, source: bytes
-    ) -> tuple[bytes, int]:
+    ) -> int:
         parts: list[bytes] = []
 
         if symbol_kind == SymbolKind.FUNCTION:

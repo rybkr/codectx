@@ -4,9 +4,18 @@ import asyncio
 from pathlib import Path
 import networkx as nx
 
-from graph.models import Symbol, SymbolKind, SymbolRef, RefKind, SymbolTable, ParsedFile
+from graph.models import (
+    Symbol,
+    SymbolKind,
+    SymbolRef,
+    RefKind,
+    SymbolTable,
+    ParsedFile,
+    ResolvedRef,
+    UnresolvedRef,
+)
 from graph.indexer import iter_source_files, is_trackable_source_file
-from graph.languages import LanguageAdapter
+from graph.languages import LanguageAdapter, adapter_for_path
 
 
 class SymbolGraph:
@@ -16,6 +25,7 @@ class SymbolGraph:
 
         self._g: nx.MultiDiGraph = nx.MultiDiGraph()
         self._symbols: SymbolTable = {}
+        self._unresolved_refs: list[UnresolvedRef] = []
 
     async def build(self) -> None:
         async with self._lock:
@@ -23,10 +33,10 @@ class SymbolGraph:
 
     def rebuild_with_overrides(self, overrides: dict[Path, bytes | None]) -> set[str]:
         old_symbols: SymbolTable = self._symbols.copy()
-        sources: dict[Path:bytes] = {
+        sources: dict[Path, bytes] = {
             path: path.read_bytes() for path, _ in iter_source_files(self.root)
         }
-        normalized: dict[Path : bytes | None] = {}
+        normalized: dict[Path, bytes | None] = {}
 
         for path, content in overrides.items():
             if is_trackable_source_file(path.resolve(), self.root):
@@ -37,7 +47,13 @@ class SymbolGraph:
             else:
                 sources[path] = content
 
-        self._g, self._symbols = self._build_graph_from_sources(self.root, sources)
+        self._g, self._symbols, self._unresolved_refs = self._build_graph_from_sources(
+            [
+                (path, adapter_for_path(path), src)
+                for path, src in sources.items()
+                if adapter_for_path(path) is not None
+            ]
+        )
 
         changed: set[str] = set()
         for qname, symbol in self._symbols.items():
@@ -46,7 +62,7 @@ class SymbolGraph:
                 or old_symbols.interface_hash != symbol.interface_hash
             ):
                 changed.add(qname)
-        changed.update(self(old_symbols.keys()) - set(self._symbols.keys()))
+        changed.update(set(old_symbols.keys()) - set(self._symbols.keys()))
         return changed
 
     def has_symbol(self, qname: str) -> bool:
@@ -70,12 +86,15 @@ class SymbolGraph:
         ]
 
     def symbols_in_file(self, path: Path) -> list[str]:
-        rel_path = path.resolve().relative_to(self.root)
-        return [symbol for symbol in self._symbols.values() if symbol.path == rel_path]
-
-    def refs(self, **attrs) -> list[SymbolRef]:
         return [
-            SymbolRef(source_symbol=u, target_name=v, **data)
+            symbol
+            for symbol in self._symbols.values()
+            if symbol.path == path.resolve()
+        ]
+
+    def refs(self, **attrs) -> list[ResolvedRef]:
+        return [
+            ResolvedRef(source_symbol=u, target_symbol=v, **data)
             for u, v, data in self._g.edges(data=True)
             if all(data.get(k) == val for k, val in attrs.items())
         ]
@@ -153,17 +172,20 @@ class SymbolGraph:
         return parents[0]
 
     def _build_sync(self) -> None:
-        graph, symbols = self._build_graph_from_sources()
-        self._g, self._symbols = graph, symbols
-
-    def _build_graph_from_sources(self) -> tuple[nx.MultiDiGraph, SymbolTable]:
-        graph: nx.MultiDiGraph = nx.MultiDiGraph()
-        symbols: SymbolTable = {}
-
         sources: list[tuple[Path, LanguageAdapter, bytes]] = [
             (path, adapter, path.read_bytes())
             for path, adapter in iter_source_files(self.root)
+            if adapter is not None
         ]
+        graph, symbols, unresolved_refs = self._build_graph_from_sources(sources)
+        self._g, self._symbols, self._unresolved_refs = graph, symbols, unresolved_refs
+
+    def _build_graph_from_sources(
+        self, sources: list[tuple[Path, LanguageAdapter, bytes]]
+    ) -> tuple[nx.MultiDiGraph, SymbolTable, list[UnresolvedRef]]:
+        graph: nx.MultiDiGraph = nx.MultiDiGraph()
+        symbols: SymbolTable = {}
+        unresolved_refs: list[UnresolvedRef] = []
         files: list[ParsedFile] = []
 
         for path, adapter, source in sources:
@@ -175,8 +197,17 @@ class SymbolGraph:
 
         for parsed in files:
             for ref in parsed.refs:
-                for target in self._resolve_ref(ref, parsed, symbols):
-                    graph.add_edge(ref.source_symbol, target, kind=ref.kind)
+                resolved, unresolved = self._resolve_ref(ref, parsed, symbols)
+                for target in resolved:
+                    graph.add_edge(
+                        ref.source_symbol,
+                        target,
+                        kind=ref.kind,
+                        module=ref.module,
+                        target_name=ref.target_name,
+                        recv_name=ref.recv_name,
+                    )
+                unresolved_refs.extend(unresolved)
 
             for symbol in parsed.symbols:
                 if symbol.parent_qname and symbol.parent_qname in symbols:
@@ -184,18 +215,50 @@ class SymbolGraph:
                         symbol.parent_qname,
                         symbol.qname,
                         kind=RefKind.CONTAINS,
+                        module=symbol.module,
+                        target_name=symbol.name,
+                    )
+                elif symbol.parent_qname is not None:
+                    unresolved_refs.append(
+                        UnresolvedRef(
+                            SymbolRef(
+                                source_symbol=symbol.parent_qname,
+                                target_name=symbol.qname,
+                                kind=RefKind.CONTAINS,
+                                module=symbol.module,
+                            ),
+                            reason=f"unrecognized symbol: {symbol.parent_qname}",
+                        )
                     )
 
             for binding in parsed.imports:
                 target = binding.target_qname or binding.target_module
                 if target and target in symbols:
-                    graph.add_edge(parsed.module, target, kind=RefKind.IMPORTS)
+                    graph.add_edge(
+                        parsed.module,
+                        target,
+                        kind=RefKind.IMPORTS,
+                        module=parsed.module,
+                        target_name=binding.local_name,
+                    )
+                else:
+                    unresolved_refs.append(
+                        UnresolvedRef(
+                            ref=SymbolRef(
+                                source_symbol=parsed.module,
+                                target_name=target,
+                                kind=RefKind.IMPORTS,
+                                module=parsed.module,
+                            ),
+                            reason=f"unrecognized symbol: {target}",
+                        )
+                    )
 
-        return graph, symbols
+        return graph, symbols, unresolved_refs
 
     def _resolve_ref(
         self, ref: SymbolRef, parsed: ParsedFile, symbols: SymbolTable
-    ) -> list[str]:
+    ) -> tuple[list[str], list[UnresolvedRef]]:
         imported_symbols: dict[str, str] = {
             binding.local_name: binding.target_qname
             for binding in parsed.imports
@@ -210,20 +273,35 @@ class SymbolGraph:
         if ref.recv_name is None:
             imported: str = imported_symbols.get(ref.target_name)
             if imported and imported in symbols:
-                return [imported]
+                return ([imported], [])
 
             same_module: str = f"{parsed.module}.{ref.target_name}"
             if same_module in symbols:
-                return [same_module]
+                return ([same_module], [])
 
         elif ref.recv_name is not None:
             imported_module: str = imported_modules.get(ref.recv_name)
             if imported_module:
                 candidate: str = f"{imported_module}.{ref.target_name}"
                 if candidate in symbols:
-                    return [candidate]
+                    return ([candidate], [])
 
         matches: list[str] = [
             s for s in symbols.keys() if s.rsplit(".", 1)[-1] == ref.target_name
         ]
-        return matches if len(matches) == 1 else []
+        if len(matches) == 1:
+            return (matches, [])
+        elif len(matches) > 1:
+            return (
+                [],
+                [UnresolvedRef(ref=ref, reason=f"ambiguous symbol: {ref.target_name}")],
+            )
+        else:
+            return (
+                [],
+                [
+                    UnresolvedRef(
+                        ref=ref, reason=f"unrecognized symbol: {ref.target_name}"
+                    )
+                ],
+            )

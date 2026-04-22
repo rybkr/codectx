@@ -16,5 +16,5 @@ class LanguageAdapter(Protocol):
     def parse_file(self, Path: Path, source: bytes, root: Path) -> ParsedFile: ...
 
     def classify_edits(
-        self, old_src: bytes, new_src: bytes, module: str
+        self, path: Path, old_src: bytes, new_src: bytes, root: Path
     ) -> list[EditResult]: ...

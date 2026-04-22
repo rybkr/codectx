@@ -65,6 +65,22 @@ class SymbolRef:
     recv_name: str | None = None
 
 
+@dataclass(frozen=True)
+class ResolvedRef:
+    source_symbol: str
+    target_symbol: str
+    target_name: str
+    kind: RefKind
+    module: str
+    recv_name: str | None = None
+
+
+@dataclass(frozen=True)
+class UnresolvedRef:
+    ref: SymbolRef
+    reason: str
+
+
 type SymbolTable = dict[str, Symbol]
 
 
