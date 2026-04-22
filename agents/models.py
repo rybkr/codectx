@@ -33,11 +33,29 @@ class StaleSymbol:
     current_body_hash: int | None
     reason: str
 
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "observed_interface_hash": self.observed_interface_hash,
+            "current_interface_hash": self.current_interface_hash,
+            "current_body_hash": self.current_body_hash,
+            "observed_body_hash": self.observed_body_hash,
+            "reason": self.reason,
+        }
+
 
 @dataclass(frozen=True)
 class StaleContextReport:
     agent_id: str
     stale_symbols: tuple[StaleSymbol, ...]
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "agent_id": self.agent_id,
+            "stale_symbols": [symbol.payload for symbol in self.stale_symbols],
+        }
 
 
 @dataclass(frozen=True)

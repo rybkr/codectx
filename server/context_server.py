@@ -13,6 +13,7 @@ from server.models import (
     SubgraphRequest,
     InvalidateRequest,
     FileUpdatesRequest,
+    RegisterAgentRequest,
 )
 
 
@@ -39,16 +40,16 @@ def create_app(root: Path) -> FastAPI:
         return [record.payload for record in service.all_symbols()]
 
     @app.get("/symbols/{symbol:path}")
-    async def get_symbol(symbol: str) -> dict[str, object]:
-        details = service.symbol_details(symbol)
+    async def get_symbol(symbol: str, agent_id: str | None = None) -> dict[str, object]:
+        details = service.symbol_details(symbol, agent_id=agent_id)
         if details is None:
             raise HTTPException(status_code=404, detail="symbol not found")
         return details.payload
 
     @app.get("/files")
-    async def file_symbols(path: str) -> dict[str, object]:
+    async def file_symbols(path: str, agent_id: str | None = None) -> dict[str, object]:
         try:
-            records = service.symbols_in_file(Path(path))
+            records = service.symbols_in_file(Path(path), agent_id=agent_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -58,7 +59,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/tasks/relevant-symbols")
     async def relevant_symbols(request: TaskQueryRequest) -> dict[str, object]:
-        records = service.relevant_symbols_for_task(request.task, limit=request.limit)
+        records = service.relevant_symbols_for_task(
+            request.task, limit=request.limit, agent_id=request.agent_id
+        )
         return {
             "task": request.task,
             "symbols": [record.payload for record in records],
@@ -66,7 +69,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/subgraph")
     async def subgraph(request: SubgraphRequest) -> dict[str, object]:
-        graph = service.subgraph_for_symbols(request.symbols, depth=request.depth)
+        graph = service.subgraph_for_symbols(
+            request.symbols, depth=request.depth, agent_id=request.agent_id
+        )
         return graph.payload
 
     @app.post("/invalidate")
@@ -118,5 +123,23 @@ def create_app(root: Path) -> FastAPI:
                 await events.unsubscribe(queue)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @app.post("/agents/register")
+    async def register_agent(request: RegisterAgentRequest) -> dict[str, object]:
+        return service.register_agent(request.name, request.task).payload
+
+    @app.post("/agents/{agent_id}/heartbeat")
+    async def heartbeat(agent_id: str) -> dict[str, object]:
+        session = service.heartbeat(agent_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        return session.payload
+
+    @app.get("/agents/{agent_id}/stale-context")
+    async def stale_context(agent_id: str) -> dict[str, object]:
+        try:
+            return service.stale_context(agent_id).payload
+        except KeyError:
+            raise HTTPException(status_code=404, detail="agent not found")
 
     return app

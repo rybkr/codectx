@@ -143,7 +143,7 @@ class ContextService:
         return self.invalidate_symbols(changed_symbols)
 
     def invalidate_symbols(self, changed_symbols: set[str]) -> ImpactReport:
-        report: ImpactReport = self._engine._impacted_symbols(changed_symbols)
+        report: ImpactReport = self._engine.impacted_symbols(changed_symbols)
         affected_agents: tuple[AgentSession, ...] = self._agents.affected_agents(
             set(report.impacted_symbols)
         )
@@ -155,6 +155,9 @@ class ContextService:
 
     def register_agent(self, name: str, task: str) -> AgentSession:
         return self._agents.register_agent(name, task)
+
+    def heartbeat(self, agent_id: str) -> AgentSession | None:
+        return self._agents.heartbeat(agent_id)
 
     def record_observation(
         self, agent_id: str, symbols: list[Symbol], source: ObservationSource
