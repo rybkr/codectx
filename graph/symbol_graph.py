@@ -4,8 +4,9 @@ import asyncio
 from pathlib import Path
 import networkx as nx
 
-from graph.models import Symbol, SymbolKind, SymbolRef, RefKind, SymbolTable
-from graph.indexer import iter_source_files
+from graph.models import Symbol, SymbolKind, SymbolRef, RefKind, SymbolTable, ParsedFile
+from graph.indexer import iter_source_files, is_trackable_source_file
+from graph.languages import LanguageAdapter
 
 
 class SymbolGraph:
@@ -23,7 +24,7 @@ class SymbolGraph:
     def rebuild_with_overrides(self, overrides: dict[Path, bytes | None]) -> set[str]:
         old_symbols: SymbolTable = self._symbols.copy()
         sources: dict[Path:bytes] = {
-            path: path.read_bytes() for path in iter_source_files(self.root)
+            path: path.read_bytes() for path, _ in iter_source_files(self.root)
         }
         normalized: dict[Path : bytes | None] = {}
 
@@ -69,20 +70,17 @@ class SymbolGraph:
         ]
 
     def symbols_in_file(self, path: Path) -> list[str]:
-        return [
-            symbol
-            for symbol in self._symbols.values()
-            if symbol.path == path.resolve()
-        ]
+        rel_path = path.resolve().relative_to(self.root)
+        return [symbol for symbol in self._symbols.values() if symbol.path == rel_path]
 
-    def edges(self, **attrs) -> list[SymbolRef]:
+    def refs(self, **attrs) -> list[SymbolRef]:
         return [
             SymbolRef(source_symbol=u, target_name=v, **data)
             for u, v, data in self._g.edges(data=True)
             if all(data.get(k) == val for k, val in attrs.items())
         ]
 
-    def node_count(self, **attrs) -> int:
+    def symbol_count(self, **attrs) -> int:
         if not attrs:
             return self._g.number_of_nodes()
         return sum(
@@ -91,7 +89,7 @@ class SymbolGraph:
             if all(d.get(k) == v for k, v in attrs.items())
         )
 
-    def edge_count(self, **attrs) -> int:
+    def ref_count(self, **attrs) -> int:
         if not attrs:
             return self._g.number_of_edges()
         return sum(
@@ -181,8 +179,12 @@ class SymbolGraph:
                     graph.add_edge(ref.source_symbol, target, kind=ref.kind)
 
             for symbol in parsed.symbols:
-                if symbol.parent and symbol.parent in symbols:
-                    graph.add_edge(symbol.parent, symbol.qname, kind=RefKind.CONTAINS)
+                if symbol.parent_qname and symbol.parent_qname in symbols:
+                    graph.add_edge(
+                        symbol.parent_qname,
+                        symbol.qname,
+                        kind=RefKind.CONTAINS,
+                    )
 
             for binding in parsed.imports:
                 target = binding.target_qname or binding.target_module

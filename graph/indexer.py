@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from pathspec import GitIgnoreSpec
-import networkx as nx
 from dataclasses import dataclass
+from typing import Iterator
 
-from graph.languages import adapter_for_path
+from graph.languages import adapter_for_path, LanguageAdapter
 
 
 EXCLUDED_DIR_NAMES: set[str] = {".git"}
@@ -95,3 +95,11 @@ def iter_source_files(root: Path) -> Iterator[tuple[Path, LanguageAdapter]]:
                 continue
 
             yield path, adapter
+
+
+def is_trackable_source_file(path: Path, root: Path) -> bool:
+    try:
+        _ = path.relative_to(root)
+    except ValueError:
+        return False
+    return not GitIgnoreMatcher(root).ignores(path)

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum, auto
+from pathlib import Path
 
 
 class SymbolKind(StrEnum):
@@ -16,14 +17,29 @@ class RefKind(StrEnum):
     REFERENCES_TYPE = auto()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class SourceSpan:
+    start_line: int
+    start_col: int
+    start_byte: int
+    end_line: int
+    end_col: int
+    end_byte: int
+
+
+@dataclass(frozen=True, slots=True)
 class Symbol:
     qname: str
+    name: str
     kind: SymbolKind
+    path: Path
+    module: str
+    language: str
+    parent_qname: str | None = None
+    span: SourceSpan | None = None
+    name_span: SourceSpan | None = None
     interface_hash: int | None = None
-    path: str | None = None
-    module: str | None = None
-    parent: str | None = None
+    body_hash: int | None = None
 
 
 @dataclass(frozen=True)
@@ -51,3 +67,22 @@ class ParsedFile:
     symbols: list[Symbol]
     refs: list[SymbolRef]
     imports: list[ImportBinding]
+
+    @property
+    def symbol_table(self) -> SymbolTable:
+        return {symbol.qname: symbol for symbol in self.symbols}
+
+
+class EditKind(StrEnum):
+    ADDED = auto()
+    DELETED = auto()
+    CONTRACT = auto()
+    INTERNAL = auto()
+
+
+@dataclass(frozen=True)
+class EditResult:
+    symbol: str
+    kind: EditKind
+    old_interface: bytes | None = None
+    new_interface: bytes | None = None

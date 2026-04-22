@@ -6,12 +6,15 @@ from tree_sitter import Language, Parser, Node, Query, QueryCursor
 import tree_sitter_python
 
 from graph.models import (
+    EditKind,
+    EditResult,
     Symbol,
     SymbolRef,
     SymbolKind,
     RefKind,
     ParsedFile,
     ImportBinding,
+    SourceSpan,
 )
 from graph.languages.base import LanguageAdapter
 
@@ -67,18 +70,40 @@ class PythonAdapter(LanguageAdapter):
 
     def parse_file(self, path: Path, source: bytes, root: Path) -> ParsedFile:
         module: str = self.module_name(path, root)
-        rel_path: Path = path.relative_to(root).as_posix()
-        root: Node = self._parser.parse(source).root_node
+        rel_path: Path = path.relative_to(root)
+        tree_root: Node = self._parser.parse(source).root_node
         return ParsedFile(
             module=module,
-            symbols=self._extract_symbols(root, module, rel_path, source),
-            refs=self._extract_refs(root, module),
-            imports=self._extract_imports(root),
+            symbols=self._extract_symbols(tree_root, module, rel_path, source),
+            refs=self._extract_refs(tree_root, module),
+            imports=self._extract_imports(tree_root),
         )
 
-    # def classify_edits(
-    #     self, old_src: bytes, new_src: bytes, module: str
-    # ) -> list[EditResult]: ...
+    def classify_edits(
+        self, path: Path, old_src: bytes, new_src: bytes, root: Path
+    ) -> list[EditResult]:
+        old_file, new_file = (
+            self.parse_file(path, old_src, root),
+            self.parse_file(path, new_src, root),
+        )
+        edit_results: list[EditResult] = []
+
+        for qname, symbol in new_file.symbol_table.items():
+            if qname not in old_file.symbol_table:
+                edit_results.append(EditResult(qname, EditKind.ADDED))
+                continue
+
+            old_symbol = old_file.symbol_table[qname]
+            if old_symbol.interface_hash != symbol.interface_hash:
+                edit_results.append(EditResult(qname, EditKind.CONTRACT))
+            elif old_symbol.body_hash != symbol.body_hash:
+                edit_results.append(EditResult(qname, EditKind.INTERNAL))
+
+        for qname in old_file.symbol_table:
+            if qname not in new_file.symbol_table:
+                edit_results.append(EditResult(qname, EditKind.DELETED))
+
+        return edit_results
 
     def _extract_symbols(
         self, root: Node, module: str, rel_path: Path, source: bytes
@@ -87,27 +112,37 @@ class PythonAdapter(LanguageAdapter):
 
         for symbol_kind in [SymbolKind.CLASS, SymbolKind.FUNCTION, SymbolKind.VARIABLE]:
             captures = QueryCursor(self._queries[symbol_kind]).captures(root)
-            for n in captures.get(f"{symbol_kind}.name", []):
+            for name_node in captures.get(f"{symbol_kind}.name", []):
+                declaration_node = self._declaration_node(name_node)
                 symbols.append(
                     Symbol(
-                        qname=self._qualified_symbol_name(n.parent, module),
+                        qname=self._qualified_symbol_name(name_node, module),
+                        name=name_node.text.decode(),
                         kind=symbol_kind,
-                        interface_hash=self._interface_hash(
-                            symbol_kind, n.parent, source
-                        ),
                         path=rel_path,
                         module=module,
-                        parent=self._parent_symbol_name(n.parent, module),
+                        language=self.name,
+                        parent_qname=self._parent_symbol_name(declaration_node, module),
+                        span=self._span(declaration_node),
+                        name_span=self._span(name_node),
+                        interface_hash=self._interface_hash(
+                            symbol_kind, declaration_node, source
+                        ),
+                        body_hash=self._body_hash(declaration_node, source),
                     )
                 )
 
         return [
             Symbol(
                 qname=module,
+                name=module.rsplit(".", 1)[-1],
                 kind=SymbolKind.MODULE,
                 path=rel_path,
                 module=module,
-                parent=None,
+                language=self.name,
+                parent_qname=None,
+                span=self._span(root),
+                body_hash=self._body_hash(root, source),
             ),
             *symbols,
         ]
@@ -124,7 +159,7 @@ class PythonAdapter(LanguageAdapter):
         call_matches = QueryCursor(self._queries[RefKind.CALLS]).matches(root)
         for _, captures in call_matches:
             for node in captures.get(f"{RefKind.CALLS}.name", []):
-                src_symbol: str = self._qualified_symbol_name(node, module)
+                src_symbol: str = self._source_symbol_name(node, module)
                 if src_symbol is not None:
                     refs.append(
                         SymbolRef(
@@ -140,7 +175,7 @@ class PythonAdapter(LanguageAdapter):
 
             recv_name = recv_nodes[0].text.decode() if recv_nodes else None
             for node in attr_nodes:
-                src_symbol = self._qualified_symbol_name(node, module)
+                src_symbol = self._source_symbol_name(node, module)
                 if src_symbol is not None:
                     refs.append(
                         SymbolRef(
@@ -160,7 +195,7 @@ class PythonAdapter(LanguageAdapter):
         captures = QueryCursor(self._queries[RefKind.REFERENCES_TYPE]).captures(root)
         for _name, nodes in captures.items():
             for node in nodes:
-                src_symbol = self._qualified_symbol_name(node, module)
+                src_symbol = self._source_symbol_name(node, module)
                 if src_symbol is not None:
                     refs.append(
                         SymbolRef(
@@ -246,12 +281,13 @@ class PythonAdapter(LanguageAdapter):
     def _qualified_symbol_name(self, node: Node, module: str) -> str:
         parts: list[str] = []
 
-        if node.type in {"assignment"}:
-            identifier: Node = next(
-                (child for child in node.children if child.type == "identifier"), None
-            )
-            if identifier is not None:
-                parts.append(identifier.text.decode())
+        if node.type == "identifier":
+            parent = node.parent
+            if parent is not None and parent.type not in {
+                "function_definition",
+                "class_definition",
+            }:
+                parts.append(node.text.decode())
 
         current: Node | None = node
         while current:
@@ -264,17 +300,25 @@ class PythonAdapter(LanguageAdapter):
         parts.reverse()
         return ".".join([module, *parts])
 
-    def _parent_symbol_name(self, node: Node, module: str) -> str | None:
+    def _parent_symbol_name(self, declaration_node: Node, module: str) -> str:
+        current: Node | None = declaration_node.parent
+        while current is not None:
+            if current.type in {"function_definition", "class_definition"}:
+                return self._qualified_symbol_name(current, module)
+            current = current.parent
+        return module
+
+    def _source_symbol_name(self, node: Node, module: str) -> str:
         current: Node | None = node.parent
         while current is not None:
             if current.type in {"function_definition", "class_definition"}:
                 return self._qualified_symbol_name(current, module)
             current = current.parent
-        return None
+        return module
 
     def _interface_hash(
         self, symbol_kind: SymbolKind, node: Node, source: bytes
-    ) -> int:
+    ) -> tuple[bytes, int]:
         parts: list[bytes] = []
 
         if symbol_kind == SymbolKind.FUNCTION:
@@ -302,9 +346,39 @@ class PythonAdapter(LanguageAdapter):
                     parts.append(self._normalize(n, source))
 
         if not parts:
-            return 0
+            return b"", 0
         digest = hashlib.blake2b(b"\x00".join(parts), digest_size=8).digest()
         return int.from_bytes(digest, "big")
+
+    def _body_hash(self, node: Node, source: bytes) -> int:
+        digest = hashlib.blake2b(
+            self._normalize(node, source),
+            digest_size=8,
+        ).digest()
+        return int.from_bytes(digest, "big")
+
+    def _declaration_node(self, name_node: Node) -> Node:
+        current: Node | None = name_node
+        while current is not None:
+            if current.type in {
+                "function_definition",
+                "class_definition",
+                "assignment",
+                "augmented_assignment",
+            }:
+                return current
+            current = current.parent
+        return name_node
+
+    def _span(self, node: Node) -> SourceSpan:
+        return SourceSpan(
+            start_line=node.start_point.row,
+            start_col=node.start_point.column,
+            start_byte=node.start_byte,
+            end_line=node.end_point.row,
+            end_col=node.end_point.column,
+            end_byte=node.end_byte,
+        )
 
     def _normalize(self, node: Node, source: bytes) -> bytes:
         text: bytes = source[node.start_byte : node.end_byte]
