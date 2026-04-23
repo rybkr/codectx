@@ -16,6 +16,9 @@ class MCPServer:
     async def build(self) -> None:
         await self._service.build()
 
+    def run(self) -> None:
+        self._mcp.run()
+
     def register_tools(self) -> None:
         @self._mcp.tool()
         def codectx_register_agent(name: str, task: str) -> dict[str, object]:
