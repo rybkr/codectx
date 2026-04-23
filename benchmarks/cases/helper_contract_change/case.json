@@ -1,0 +1,30 @@
+{
+  "name": "helper_contract_change",
+  "agents": [
+    {
+      "name": "agent",
+      "task": "Update service behavior",
+      "observes": [
+        "service.run"
+      ]
+    }
+  ],
+  "update_files": [
+    "helpers.py"
+  ],
+  "expected": {
+    "changed_symbols": [
+      "helpers.helper"
+    ],
+    "impacted_symbols": [
+      "service",
+      "service.run"
+    ],
+    "affected_agents": [
+      "agent"
+    ],
+    "stale_symbols": [
+      "helpers.helper"
+    ]
+  }
+}

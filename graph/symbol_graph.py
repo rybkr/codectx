@@ -59,7 +59,7 @@ class SymbolGraph:
         for qname, symbol in self._symbols.items():
             if (
                 qname not in old_symbols
-                or old_symbols.interface_hash != symbol.interface_hash
+                or old_symbols[qname].interface_hash != symbol.interface_hash
             ):
                 changed.add(qname)
         changed.update(set(old_symbols.keys()) - set(self._symbols.keys()))

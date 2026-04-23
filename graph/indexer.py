@@ -102,4 +102,4 @@ def is_trackable_source_file(path: Path, root: Path) -> bool:
         _ = path.relative_to(root)
     except ValueError:
         return False
-    return not GitIgnoreMatcher(root).ignores(path)
+    return not GitIgnoreMatcher(root).ignores(path, is_dir=False)
